@@ -1,0 +1,9 @@
+# 개인 보안 파일 및 토큰 캐시
+.env
+.cache
+.cache-*
+
+# 가상환경 및 Python 컴파일 파일
+playlistvenv/
+__pycache__/
+*.pyc
