@@ -17,9 +17,9 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 
 # 멀티 모델 체인 순서 정의 (주 모델 -> 고성능 보조 모델 -> 높은 안정성 백업 모델)
 MODEL_CHAIN = [
-    "gemini-3.6-flash",
-    "gemini-3.8-flash",
-    "gemini-3.5-flash-lite"
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash"
 ]
 
 def recommend_playlist(
