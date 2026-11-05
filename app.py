@@ -1,12 +1,28 @@
 import streamlit as st
+import os
 from services.gemini_service import recommend_playlist
 from services.spotify_service import get_spotify_client, get_track_uris, create_spotify_playlist
+from spotipy.oauth2 import SpotifyOAuth
+from spotipy.cache_handler import MemoryCacheHandler
 
 # 1. 페이지 기본 설정 및 헤더
 st.set_page_config(
     page_title="AI Music Playlist Generator",
     page_icon="🎵",
     layout="wide"
+)
+# 2. sp_oauth 객체 생성 전 변수 선언 (예: get_secret 함수 또는 os.getenv 사용)
+SPOTIPY_CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID")
+SPOTIPY_CLIENT_SECRET = os.getenv("SPOTIPY_CLIENT_SECRET")
+SPOTIPY_REDIRECT_URI = os.getenv("SPOTIPY_REDIRECT_URI")
+
+sp_oauth = SpotifyOAuth(
+    client_id=SPOTIPY_CLIENT_ID,
+    client_secret=SPOTIPY_CLIENT_SECRET,
+    redirect_uri=SPOTIPY_REDIRECT_URI,
+    scope="playlist-modify-public playlist-modify-private",
+    cache_handler=MemoryCacheHandler(), # 세션별 메모리 캐시 격리
+    show_dialog=True
 )
 
 st.title("🎵 AI 맞춤형 음악 플레이리스트 추천 & 자동 생성기")
