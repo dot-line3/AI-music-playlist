@@ -1,9 +1,13 @@
 import streamlit as st
-import os
 from services.gemini_service import recommend_playlist
-from services.spotify_service import get_spotify_client, get_track_uris, create_spotify_playlist
-from spotipy.oauth2 import SpotifyOAuth
-from spotipy.cache_handler import MemoryCacheHandler
+from services.spotify_service import (
+    SessionCacheHandler,
+    create_oauth_manager,
+    create_spotify_playlist,
+    get_spotify_client,
+    get_track_uris,
+    new_oauth_state,
+)
 
 # 1. 페이지 기본 설정 및 헤더
 st.set_page_config(
@@ -11,19 +15,34 @@ st.set_page_config(
     page_icon="🎵",
     layout="wide"
 )
-# 2. sp_oauth 객체 생성 전 변수 선언 (예: get_secret 함수 또는 os.getenv 사용)
-SPOTIPY_CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID")
-SPOTIPY_CLIENT_SECRET = os.getenv("SPOTIPY_CLIENT_SECRET")
-SPOTIPY_REDIRECT_URI = os.getenv("SPOTIPY_REDIRECT_URI")
 
-sp_oauth = SpotifyOAuth(
-    client_id=SPOTIPY_CLIENT_ID,
-    client_secret=SPOTIPY_CLIENT_SECRET,
-    redirect_uri=SPOTIPY_REDIRECT_URI,
-    scope="playlist-modify-public playlist-modify-private",
-    cache_handler=MemoryCacheHandler(), # 세션별 메모리 캐시 격리
-    show_dialog=True
-)
+
+# 2. 사용자별 Spotify OAuth (토큰은 각 사용자의 st.session_state에만 저장)
+@st.cache_resource
+def pending_oauth_states() -> set:
+    """발급한 OAuth state 값 목록 (CSRF 방지). Spotify에서 돌아오면 새 세션이 열리므로 서버 단위로 보관."""
+    return set()
+
+
+cache_handler = SessionCacheHandler(st.session_state)
+sp_oauth = create_oauth_manager(cache_handler)
+
+# Spotify 인증 후 리다이렉트로 돌아온 경우: code를 이 세션의 토큰으로 교환
+query = st.query_params
+if "code" in query:
+    returned_state = query.get("state")
+    if returned_state and returned_state in pending_oauth_states():
+        pending_oauth_states().discard(returned_state)
+        try:
+            sp_oauth.get_access_token(query["code"], as_dict=False, check_cache=False)
+        except Exception as e:
+            st.error(f"❌ Spotify 로그인 처리 실패: {e}")
+    else:
+        st.error("❌ 유효하지 않은 로그인 요청입니다. 다시 연결해 주세요.")
+    st.query_params.clear()
+elif "error" in query:
+    st.warning("Spotify 계정 연결이 취소되었습니다.")
+    st.query_params.clear()
 
 st.title("🎵 AI 맞춤형 음악 플레이리스트 추천 & 자동 생성기")
 st.caption("Gemini AI가 분위기와 청취 상황을 분석하여 나만의 플레이리스트를 큐레이팅하고, 실제 음악 앱 계정에 자동으로 생성해 드립니다.")
@@ -33,6 +52,29 @@ if "recommendation" not in st.session_state:
     st.session_state.recommendation = None
 if "playlist_url" not in st.session_state:
     st.session_state.playlist_url = None
+
+st.divider()
+
+# 2-1. Spotify 계정 연결 상태 (추천 전에 연결: 인증 후 돌아오면 새 화면이 열리기 때문)
+st.subheader("0. 🟢 Spotify 계정 연결")
+spotify_client = get_spotify_client(sp_oauth)
+if spotify_client:
+    conn_col1, conn_col2 = st.columns([4, 1])
+    try:
+        display_name = spotify_client.current_user().get("display_name") or "Spotify 사용자"
+    except Exception:
+        display_name = "Spotify 사용자"
+    conn_col1.success(f"✅ {display_name} 계정으로 연결됨")
+    if conn_col2.button("연결 해제", use_container_width=True):
+        cache_handler.clear()
+        st.rerun()
+else:
+    if "oauth_state" not in st.session_state:
+        st.session_state.oauth_state = new_oauth_state()
+        pending_oauth_states().add(st.session_state.oauth_state)
+    auth_url = sp_oauth.get_authorize_url(state=st.session_state.oauth_state)
+    st.caption("플레이리스트를 내 계정에 저장하려면 먼저 연결해 주세요. (추천만 받을 때는 생략 가능)")
+    st.link_button("Spotify 계정 연결하기", auth_url)
 
 st.divider()
 
@@ -118,10 +160,12 @@ if st.session_state.recommendation:
         if st.button("🟢 Spotify 내 계정에 플레이리스트 저장하기", type="primary", use_container_width=True):
             with st.spinner("🎧 Spotify 곡 검색 및 계정 연동 진행 중..."):
                 try:
-                    sp = get_spotify_client()
-                    track_uris, missing_tracks = get_track_uris(sp, tracks)
-                    
-                    if not track_uris:
+                    sp = get_spotify_client(sp_oauth)
+                    track_uris, missing_tracks = get_track_uris(sp, tracks) if sp else ([], [])
+
+                    if sp is None:
+                        st.warning("⚠️ 먼저 페이지 상단에서 Spotify 계정을 연결해 주세요.")
+                    elif not track_uris:
                         st.error("❌ Spotify에서 일치하는 트랙을 찾을 수 없습니다.")
                     else:
                         url = create_spotify_playlist(
@@ -131,7 +175,9 @@ if st.session_state.recommendation:
                             rec.get("description", "")
                         )
                         st.session_state.playlist_url = url
-                        
+                        if not url:
+                            st.error("❌ 플레이리스트 생성에 실패했습니다. 잠시 후 다시 시도해 주세요.")
+
                         if missing_tracks:
                             st.warning(f"⚠️ 다음 곡은 Spotify 검색 결과가 없어 제외되었습니다: {', '.join(missing_tracks)}")
                 except Exception as e:

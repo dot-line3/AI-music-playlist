@@ -27,6 +27,17 @@ if not GEMINI_API_KEY:
 # 2. SDK 클라이언트 초기화
 client = genai.Client(api_key=GEMINI_API_KEY)
 
+
+def _thinking_config(model_name: str) -> dict:
+    """
+    곡 추천은 깊은 추론이 필요 없는 생성 작업이므로 생각(thinking) 토큰을 최소화해 지연을 줄인다.
+    (미설정 시 gemini-3.1-flash-lite 응답이 2~21초로 크게 흔들림, 평균 11.49초 측정)
+    모델 세대별로 파라미터가 다름: Gemini 3 = thinking_level, Gemini 2.5 = thinking_budget
+    """
+    if model_name.startswith("gemini-2."):
+        return {"thinking_budget": 0}
+    return {"thinking_level": "LOW"}
+
 def recommend_playlist(
     genre: str,
     mood: str,
@@ -36,16 +47,18 @@ def recommend_playlist(
     retry_delay: float = 1.0         # [Latency 최적화] 대기 시간을 1초로 축소
 ) -> Dict[str, Any]:
     """
-    [분석 3 해결책 구현]
-    트래픽 폭주 및 503 과부하 시 지연 시간을 최소화하고 가용성 99.9%를 보장하는
-    3단계 Fast-Failover Model Fallback Chain
+    트래픽 폭주 및 503/429 과부하 시 모델당 1회만 빠르게 재시도한 뒤
+    다음 모델로 전환하는 3단계 Fast-Failover Model Fallback Chain
     """
     # 속도, 성능, 안정성을 고려한 3단계 우선순위 모델 체인
     model_chain = [
-        "gemini-3.1-flash-lite",    # 1순위: 메인 고속 모델
-        "gemini-3.5-flash-lite",      # 2순위: 고성능 백업 모델
-        "gemini-2.5-flash"     # 3순위: 최고 안정성 백업 모델
+        "gemini-3.5-flash-lite",    # 1순위: 메인 고속 모델
+        "gemini-3.1-flash-lite",    # 2순위: 백업 모델
+        "gemini-2.5-flash"          # 3순위: 최종 백업 모델
     ]
+    # 응답 지연 기반 전환: 정상 응답은 2초 안팎이지만 서버 혼잡 시 40초 이상 걸리는 경우가 측정됨.
+    # 앞 모델은 10초 안에 응답이 없으면 끊고 다음 모델로 넘어가며, 마지막 모델만 30초까지 대기한다.
+    timeouts_ms = {"gemini-3.5-flash-lite": 10_000, "gemini-3.1-flash-lite": 10_000, "gemini-2.5-flash": 30_000}
 
     prompt = f"""
     당신은 음악 취향 분석 및 곡 큐레이팅에 특화된 세계 최고 수준의 AI 음악 DJ입니다.
@@ -79,10 +92,14 @@ def recommend_playlist(
                         "response_mime_type": "application/json",
                         "response_schema": PlaylistResponse,
                         "temperature": 0.7,
+                        "thinking_config": _thinking_config(model_name),
+                        "http_options": {"timeout": timeouts_ms.get(model_name, 30_000)},
                     },
                 )
                 print(f"[Model Chain Success] ✨ '{model_name}' 모델을 통해 성공적으로 생성 완료")
-                return json.loads(response.text)
+                result = json.loads(response.text)
+                result["_model_used"] = model_name  # 측정/로그용 (UI에서는 사용하지 않음)
+                return result
 
             except APIError as e:
                 last_error = e
@@ -96,7 +113,8 @@ def recommend_playlist(
 
             except Exception as e:
                 last_error = e
-                print(f"  └ ⚠️ '{model_name}' 예외 발생 ({e}). 다음 백업 모델로 즉시 전환")
+                # 타임아웃(응답 지연)도 여기서 처리되어 다음 모델로 전환됨
+                print(f"  └ ⚠️ '{model_name}' {type(e).__name__} ({e}). 다음 백업 모델로 즉시 전환")
                 break
 
     raise RuntimeError(f"폴백 체인의 모든 모델 호출이 실패했습니다. 최종 오류: {last_error}")
