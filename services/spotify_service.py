@@ -12,6 +12,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def get_config(key: str, default: str = "") -> str:
+    """Streamlit Cloud Secrets 우선, 없으면 로컬 .env/환경변수 사용"""
+    try:
+        import streamlit as st
+        if key in st.secrets:
+            return str(st.secrets[key]).strip()
+    except Exception:
+        pass
+    return os.getenv(key, default).strip()
+
+
 SCOPE = "playlist-modify-public playlist-modify-private"
 ARTIST_MATCH_THRESHOLD = 0.9  # 아티스트명 유사도 기준 (0~1). 0.8은 "Chet Baker"/"Chet Faker"를 같은 가수로 판정
 
@@ -43,9 +55,9 @@ class SessionCacheHandler(CacheHandler):
 def create_oauth_manager(cache_handler: CacheHandler) -> SpotifyOAuth:
     """세션 전용 캐시를 사용하는 OAuth 매니저 생성 (서버에서 브라우저를 열지 않음)"""
     return SpotifyOAuth(
-        client_id=os.getenv("SPOTIPY_CLIENT_ID"),
-        client_secret=os.getenv("SPOTIPY_CLIENT_SECRET"),
-        redirect_uri=os.getenv("SPOTIPY_REDIRECT_URI", "http://127.0.0.1:8501"),
+        client_id=get_config("SPOTIPY_CLIENT_ID"),
+        client_secret=get_config("SPOTIPY_CLIENT_SECRET"),
+        redirect_uri=get_config("SPOTIPY_REDIRECT_URI", "http://127.0.0.1:8501"),
         scope=SCOPE,
         cache_handler=cache_handler,
         open_browser=False,
