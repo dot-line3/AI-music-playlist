@@ -54,11 +54,11 @@ def recommend_playlist(
     model_chain = [
         "gemini-3.5-flash-lite",    # 1순위: 메인 고속 모델
         "gemini-3.1-flash-lite",    # 2순위: 백업 모델
-        "gemini-2.5-flash"          # 3순위: 최종 백업 모델
+        "gemini-3.6-flash"          # 3순위: 최종 백업 모델 (gemini-2.5-flash가 응답 없이 멈춰 교체)
     ]
     # 응답 지연 기반 전환: 정상 응답은 2초 안팎이지만 서버 혼잡 시 40초 이상 걸리는 경우가 측정됨.
     # 앞 모델은 10초 안에 응답이 없으면 끊고 다음 모델로 넘어가며, 마지막 모델만 30초까지 대기한다.
-    timeouts_ms = {"gemini-3.5-flash-lite": 10_000, "gemini-3.1-flash-lite": 10_000, "gemini-2.5-flash": 30_000}
+    timeouts_ms = {"gemini-3.5-flash-lite": 10_000, "gemini-3.1-flash-lite": 10_000, "gemini-3.6-flash": 30_000}
 
     prompt = f"""
     당신은 음악 취향 분석 및 곡 큐레이팅에 특화된 세계 최고 수준의 AI 음악 DJ입니다.
